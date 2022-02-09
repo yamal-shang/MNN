@@ -10,21 +10,29 @@
 #define Schedule_hpp
 
 #include <stdio.h>
+#include <MNN/Interpreter.hpp>
 #include <map>
 #include <string>
 #include <vector>
-#include "Backend.hpp"
-#include "Interpreter.hpp"
-#include "MNN_generated.h"
-
+#include <array>
+#include "core/Backend.hpp"
+#include "core/Command.hpp"
 namespace MNN {
 
 struct Op;
 struct Net;
 
 /** net scheduler */
-class Schedule {
+class MNN_PUBLIC Schedule {
 public:
+    enum Type {
+        // Size can be compute seperately
+        SEPERATE = 0,
+        // When size is fixed, the content is fixed
+        CONSTANT = 1,
+        // Size can't be compute seperately
+        NOT_SEPERATE
+    };
     /** pipeline info */
     struct PipelineInfo {
         /** op */
@@ -33,6 +41,14 @@ public:
         std::vector<Tensor*> inputs;
         /** output tensors */
         std::vector<Tensor*> outputs;
+        /** schedule type*/
+        Schedule::Type type = Schedule::Type::SEPERATE;
+
+        /**Command buffer for cache*/
+        CommandBuffer cacheBuffer;
+
+        /**Command buffer for execute*/
+        CommandBuffer executeBuffer;
     };
 
     /** schedule info */
@@ -43,10 +59,14 @@ public:
         std::map<std::string, Tensor*> inputTensors;
         /** output tensors map */
         std::map<std::string, Tensor*> outputTensor;
-        /** all tensors map */
-        std::vector<std::pair<int, std::shared_ptr<Tensor>>> allTensors;
-        /** attatched GPU library info */
-        const GpuLibrary* library;
+        /** all tensors */
+        std::vector<std::shared_ptr<Tensor>> allTensors;
+        /** input valid for resize*/
+        bool validForResize;
+        /** Default Backend*/
+        std::shared_ptr<Backend> defaultBackend;
+        /** size need input's content*/
+        bool needInputContentForShape = false;
     };
 
     /**
@@ -55,7 +75,8 @@ public:
      * @param config    given configuration.
      * @return schedule info.
      */
-    static ScheduleInfo schedule(const Net* net, const std::vector<ScheduleConfig>& config);
+    static bool schedule(ScheduleInfo& result, const Net* net, const std::vector<ScheduleConfig>& config, const RuntimeInfo& runtimeInfo);
+    static MNNForwardType getApprociateType(const ScheduleConfig& config);
 };
 } // namespace MNN
 

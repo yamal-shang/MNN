@@ -23,7 +23,7 @@ table Blob {
     dataFormat: MNN_DATA_FORMAT;
 
     // data type
-    dataType: DataType;
+    dataType: DataType = DT_FLOAT;
 
     // data union
     uint8s: [ubyte];
@@ -32,4 +32,29 @@ table Blob {
     int64s: [long];
     float32s: [float];
     strings: [string];
+}
+
+table ListValue {
+    s:[string];
+    i:[int];
+    f:[float];
+    b:[bool];
+    type:[DataType];
+}
+
+table Attribute {
+    s:string;
+    i:int = 0;
+    b:bool = false;
+    key:string(key);
+    type:DataType;
+    f:float = 0.0;
+    tensor:Blob;
+    list:ListValue;
+    func:NamedAttrList;
+}
+
+table NamedAttrList {
+    name: string;
+    attr: [Attribute];
 }

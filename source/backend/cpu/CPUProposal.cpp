@@ -6,13 +6,13 @@
 //  Copyright © 2018, Alibaba Group Holding Limited
 //
 
-#include "CPUProposal.hpp"
 #include <math.h>
-#include "CPUBackend.hpp"
-#include "CommonOptFunction.h"
-#include "Concurrency.h"
+#include "backend/cpu/CPUProposal.hpp"
+#include "backend/cpu/CPUBackend.hpp"
+#include "core/Concurrency.h"
+#include "CPUTensorConvert.hpp"
 //#define MNN_OPEN_TIME_TRACE
-#include "AutoTime.hpp"
+#include <MNN/AutoTime.hpp>
 namespace MNN {
 
 CPUProposal::CPUProposal(Backend *backend, const Proposal *proposal) : Execution(backend), mProposal(proposal) {
@@ -120,7 +120,7 @@ ErrorCode CPUProposal::onResize(const std::vector<Tensor *> &inputs, const std::
 
     mRun = [=]() {
         // download
-        MNNUnpackC4(mScore.host<float>(), score->host<float>(), score->width() * score->height(), score->channel());
+        MNNUnpackC4Origin(mScore.host<float>(), score->host<float>(), score->width() * score->height(), score->channel(), score->width() * score->height());
 
         auto scrWidth = score->width(), scrHeight = score->height(), scrSize = scrWidth * scrHeight;
         auto boxWidth = boxes->width(), boxHeight = boxes->height(), boxSize = boxWidth * boxHeight;
@@ -137,7 +137,6 @@ ErrorCode CPUProposal::onResize(const std::vector<Tensor *> &inputs, const std::
         proposalBoxes.reserve(boxSize * anchorHeight);
 
         {
-            AUTOTIME;
             for (int ah = 0; ah < anchorHeight; ++ah) {
                 auto boxPtr   = boxes->host<float>() + ah * 4 * boxSize;
                 auto scorePtr = mScore.host<float>() + (ah + anchorHeight) * scrSize;
@@ -177,7 +176,6 @@ ErrorCode CPUProposal::onResize(const std::vector<Tensor *> &inputs, const std::
         {
             // sort all (proposal, score) pairs by score from highest to lowest
             // take top preNmsTopN
-            AUTOTIME;
             auto compareFunction = [](const score_box_t &a, const score_box_t &b) {
                 return box_score(a) > box_score(b);
             };
@@ -195,7 +193,6 @@ ErrorCode CPUProposal::onResize(const std::vector<Tensor *> &inputs, const std::
         std::vector<long> picked;
         picked.reserve(afterNmsTopN);
         {
-            AUTOTIME;
             pickBoxes(proposalBoxes, picked, nmsThreshold, afterNmsTopN);
         }
 
@@ -212,13 +209,13 @@ ErrorCode CPUProposal::onResize(const std::vector<Tensor *> &inputs, const std::
             memset(scoresPtr, 0, outputs[1]->size());
         }
 
-        for (int i = 0; i < pickedCount; i++, roiPtr += roiStep, scoresPtr += scoreStep) {
+        for (int i = 0; i < pickedCount; i++, scoresPtr += scoreStep) {
             auto box  = proposalBoxes[picked[i]];
-            roiPtr[0] = 0;
-            roiPtr[1] = box_rect_xmin(box);
-            roiPtr[2] = box_rect_ymin(box);
-            roiPtr[3] = box_rect_xmax(box);
-            roiPtr[4] = box_rect_ymax(box);
+            roiPtr[i * 4 + 0] = 0;
+            roiPtr[i * 4 + 1] = box_rect_xmin(box);
+            roiPtr[i * 4 + 2] = box_rect_ymin(box);
+            roiPtr[i * 4 + 3] = box_rect_xmax(box);
+            roiPtr[i * 4 + outputs[0]->length(0) * 4] = box_rect_ymax(box);
             if (scoresPtr) {
                 scoresPtr[0] = box_score(box);
             }

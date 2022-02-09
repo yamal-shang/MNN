@@ -9,13 +9,13 @@
 #ifndef DeconvolutionWithStride_hpp
 #define DeconvolutionWithStride_hpp
 
-#include "../CPUDeconvolution.hpp"
-#include "Backend.hpp"
-
+#include "backend/cpu/CPUDeconvolution.hpp"
+#include "core/Backend.hpp"
+#include <mutex>
 namespace MNN {
 class DeconvolutionWithStride : public CPUDeconvolutionCommon {
 public:
-    DeconvolutionWithStride(const Op *convOp, Backend *b);
+    DeconvolutionWithStride(const Tensor *input, const Op *convOp, Backend *b);
     virtual ~DeconvolutionWithStride();
     virtual ErrorCode onResize(const std::vector<Tensor *> &inputs, const std::vector<Tensor *> &outputs) override;
     virtual ErrorCode onExecute(const std::vector<Tensor *> &inputs, const std::vector<Tensor *> &outputs) override;
@@ -50,6 +50,7 @@ private:
     void _extract(const Op *convOp);
 
     std::shared_ptr<Tensor> mSrcBuffer;
+    std::shared_ptr<Tensor> mMatMulPackBuffer;
     std::map<int, std::shared_ptr<Tensor>> mTransformedBuffer;
     std::shared_ptr<Tensor> mDestBuffer;
 
@@ -58,6 +59,7 @@ private:
     std::mutex mLock;
     int mStrideX = 1;
     int mStrideY = 1;
+    std::vector<float> mPostParameters;
 };
 } // namespace MNN
 

@@ -2,10 +2,33 @@
 
 [中文版本](README_CN.md)
 
-## Intro
-MNN is a lightweight deep neural network inference engine. It loads models and do inference on devices. At present, MNN has been integrated in more than 20 apps of Alibaba-inc, such as Taobao, Tmall, Youku and etc., covering live broadcast, short video capture, search recommendation, product searching by image, interactive marketing, equity distribution, security risk control and other scenarios. In addition, MNN is also used on embedded devices, such as IoT.
+[MNN Homepage](http://www.mnn.zone)
 
-## Features
+## Intro
+MNN is a highly efficient and lightweight deep learning framework. It supports inference and training of deep learning models, and has industry leading performance for inference and training on-device. At present, MNN has been integrated in more than 20 apps of Alibaba Inc, such as Taobao, Tmall, Youku, Dingtalk, Xianyu and etc., covering more than 70 usage scenarios such as live broadcast, short video capture, search recommendation, product searching by image, interactive marketing, equity distribution, security risk control. In addition, MNN is also used on embedded devices, such as IoT.
+
+The design principles and performance data of MNN has been published in an MLSys 2020 paper [here](https://arxiv.org/pdf/2002.12418.pdf). Please cite MNN in your publications if it helps your research:
+
+    @inproceedings{alibaba2020mnn,
+      author = {Jiang, Xiaotang and Wang, Huan and Chen, Yiliu and Wu, Ziqi and Wang, Lichuan and Zou, Bin and Yang, Yafeng and Cui, Zongyang and Cai, Yu and Yu, Tianhang and Lv, Chengfei and Wu, Zhihua},
+      title = {MNN: A Universal and Efficient Inference Engine},
+      booktitle = {MLSys},
+      year = {2020}
+    }
+
+## Documentation and Tools
+MNN's docs are in placed in [Yuque docs here](https://www.yuque.com/mnn/en).
+
+MNN Workbench could be downloaded from [MNN's homepage](http://www.mnn.zone), which provides pretrained models, visualized training tools, and one-click deployment of models to devices.
+
+## Key Features
+### High performance
+- Implements core computing with lots of optimized assembly code to make full use of the ARM CPU.
+- For iOS, GPU acceleration (Metal) can be turned on, which is faster than Apple's native CoreML.
+- For Android, `OpenCL`, `Vulkan`, and `OpenGL` are available and deep tuned for mainstream GPUs (`Adreno` and `Mali`).
+- Convolution and transposition convolution algorithms are efficient and stable. The Winograd convolution algorithm is widely used to better symmetric convolutions such as 3x3 -> 7x7.
+- Twice speed increase for the new architecture ARM v8.2 with FP16 half-precision calculation support.
+
 ### Lightweight
 - Optimized for devices, no dependencies, can be easily deployed to mobile devices and a variety of embedded devices.
 - iOS platform: static library size for armv7+arm64 platforms is about 5MB, size increase of linked executables is about 620KB, and metallib file is about 600KB.
@@ -13,21 +36,15 @@ MNN is a lightweight deep neural network inference engine. It loads models and d
 
 ### Versatility
 - Supports `Tensorflow`, `Caffe`, `ONNX`, and supports common neural networks such as `CNN`, `RNN`, `GAN`.
-- Supports 86 `Tensorflow` ops, 34 `Caffe` ops; MNN ops: 71 for CPU, 55 for Metal, 29 for OpenCL, and 31 for Vulkan.
+- MNN model converter supports 149 `Tensorflow` OPs, 58 `TFLite` OPs, 47 `Caffe` OPs and 74 `ONNX` OPs; Number of OPs by different MNN hardware backends: 111 for CPU, 6 for ARM V8.2, 55 for Metal, 43 for OpenCL, and 32 for Vulkan.
 - Supports iOS 8.0+, Android 4.3+ and embedded devices with POSIX interface.
-- Supports hybrid computing on multiple devices. Currently supports CPU and GPU. GPU op plugin can be loaded dynamically to replace default (CPU) op implementation.
+- Supports hybrid computing on multiple devices. Currently supports CPU and GPU.
 
-### High performance
-- Implements core computing with lots of optimized assembly code to make full use of the ARM CPU.
-- For iOS, GPU acceleration (Metal) can be turned on, which is faster than Apple's native CoreML.
-- For Android, `OpenCL`, `Vulkan`, and `OpenGL` are available and deep tuned for mainstream GPUs (`Adreno` and `Mali`).
-- Convolution and transposition convolution algorithms are efficient and stable. The Winograd convolution algorithm is widely used to better symmetric convolutions such as 3x3 -> 7x7.
-- Additional optimizations for the new architecture ARM v8.2 with half-precision calculation support.
-
-### Easy to use
+### Ease of use
 - Efficient image processing module, speeding up affine transform and color space transform without libyuv or opencv.
 - Provides callbacks throughout the workflow to extract data or control the execution precisely.
 - Provides options for selecting inference branch and paralleling branches on CPU and GPU.
+- (BETA) MNN Python API helps ML engineers to easily use MNN to build a model, train it and quantize it, without dipping their toes in C++ code.
 
 ## Architecture
 ![architecture](doc/architecture.png)
@@ -38,35 +55,17 @@ Converter consists of Frontends and Graph Optimize. The former is responsible fo
 
 Interpreter consists of Engine and Backends. The former is responsible for the loading of the model and the scheduling of the calculation graph; the latter includes the memory allocation and the Op implementation under each computing device. In Engine and Backends, MNN applies a variety of optimization schemes, including applying Winograd algorithm in convolution and deconvolution, applying Strassen algorithm in matrix multiplication, low-precision calculation, Neon optimization, hand-written assembly, multi-thread optimization, memory reuse, heterogeneous computing, etc.
 
-## Quick start
-- [Install](doc/Install_EN.md)
-- [Tutorial](doc/Tutorial_EN.md)
-- [API](doc/API/API_index.html)
-- [Demo](demo)
-- [Model conversion](tools/converter/README.md)
-- [Test tools](doc/Tools_EN.md)
-- [Op list](doc/OpList.md)
-- [Contributing](doc/Contributing_EN.md)
+## How to Discuss and Get Help From MNN Community
 
-## Benchmark
-- [Benchmark](doc/Benchmark_EN.md)
+Scan the following QR codes to join Dingtalk discussion group. The group discussions are predominantly Chinese. But we welcome and will help English speakers.
 
-## How to customize
-- [Add custom op](doc/AddOp_EN.md)
-- [Add custom backend](doc/AddBackend_EN.md)
-
-## Feedbacks
-- [FAQ](doc/FAQ.md)
-
-Scan QR code to join DingDing discussion group.
-
-<img src="doc/QRCodeDingDing.png" height="256"/>
+See https://www.yuque.com/mnn/cn/feedback for dingtalk group barcodes.
 
 ## License
 Apache 2.0
 
 ## Acknowledgement
-MNN participants: Taobao Technology Department, Search Engineering Team, DAMO Team, Youku and other group employees.
+MNN participants: Taobao Technology Department, Search Engineering Team, DAMO Team, Youku and other Alibaba Group employees.
 
 MNN refers to the following projects:
 - [Caffe](https://github.com/BVLC/caffe)
@@ -81,3 +80,10 @@ MNN refers to the following projects:
 - [Tensorflow](https://github.com/tensorflow/tensorflow)
 - [ncnn](https://github.com/Tencent/ncnn)
 - [paddle-mobile](https://github.com/PaddlePaddle/paddle-mobile)
+- [stb](https://github.com/nothings/stb)
+- [rapidjson](https://github.com/Tencent/rapidjson)
+- [pybind11](https://github.com/pybind/pybind11)
+- [pytorch](https://github.com/pytorch/pytorch)
+- [bolt](https://github.com/huawei-noah/bolt)
+- [libyuv](https://chromium.googlesource.com/libyuv/libyuv)
+- [libjpeg](https://github.com/libjpeg-turbo/libjpeg-turbo)

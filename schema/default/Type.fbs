@@ -8,9 +8,11 @@
 
 namespace MNN;
 enum NetSource : byte {
-	CAFFE = 0,
-	TENSORFLOW,
-	TFLITE
+  CAFFE = 0,
+  TENSORFLOW,
+  TFLITE,
+  ONNX,
+  TORCH
 }
 
 // data type for blob or tensor data

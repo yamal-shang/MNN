@@ -9,28 +9,47 @@
 #ifndef ConvolutionTiledExecutor_hpp
 #define ConvolutionTiledExecutor_hpp
 
-#include <functional>
-#include "../CPUConvolution.hpp"
-#include "AutoStorage.h"
 
-// Tiled Slide Window Algorithm
+#include <functional>
+#include "backend/cpu/CPUConvolution.hpp"
+// Tiled Slide Window or Im2Col + GEMM
 namespace MNN {
-class ConvolutionTiledExecutor : public CPUConvolution {
+class ConvolutionTiledImpl : public CPUConvolution {
 public:
-    ConvolutionTiledExecutor(const Convolution2DCommon *common, Backend *b, const float *originWeight,
-                             size_t originWeightSize, const float *bias, size_t biasSize);
-    virtual ~ConvolutionTiledExecutor();
+    ConvolutionTiledImpl(const Convolution2DCommon *common, Backend *b) : CPUConvolution(common, b) {
+        // Do nothing
+    }
+    virtual ~ConvolutionTiledImpl() = default;
     virtual ErrorCode onExecute(const std::vector<Tensor *> &inputs, const std::vector<Tensor *> &outputs) override;
     virtual ErrorCode onResize(const std::vector<Tensor *> &inputs, const std::vector<Tensor *> &outputs) override;
+    virtual void getPackParameter(int* eP, int* lP, int* hP, const CoreFunctions* core) = 0;
 
 protected:
-    std::shared_ptr<Tensor> mWeight;
-    std::shared_ptr<Tensor> mBias;
-    int mSrcCount;
-
-    Tensor mTempBuffer;
-    std::vector<std::pair<int, std::function<void(int)>>> mFunctions;
+    Tensor mTempBufferTranspose;
+    std::pair<int, std::function<void(int)>> mFunction;
 };
+
+class ConvolutionTiledExecutor : public Execution {
+public:
+    ConvolutionTiledExecutor(Backend* b, const float* bias, size_t biasSize);
+    ConvolutionTiledExecutor(std::shared_ptr<CPUConvolution::Resource> res, Backend* b);
+    virtual ~ConvolutionTiledExecutor();
+
+    virtual ErrorCode onExecute(const std::vector<Tensor *> &inputs, const std::vector<Tensor *> &outputs) override {
+        return NO_EXECUTION;
+    }
+    virtual ErrorCode onResize(const std::vector<Tensor *> &inputs, const std::vector<Tensor *> &outputs) override {
+        return NO_EXECUTION;
+    }
+    virtual bool onClone(Backend* bn, const Op* op, Execution** dst) override;
+    void initWeight(const float *source, float* cache, int depth, int outputCount, int kernelSize, const CoreFunctions* function);
+
+protected:
+    std::vector<Tensor *> mInputs;
+    std::shared_ptr<CPUConvolution::Resource> mResource;
+};
+
+
 } // namespace MNN
 
 #endif /* ConvolutionTiledExecutor_hpp */

@@ -3,22 +3,36 @@
 //  MNN
 //
 //  Created by MNN on 2019/05/08.
-//  Copyright © 2019, Alibaba Group Holding Limited
+//  Copyright © 2018, Alibaba Group Holding Limited
 //
 
 #include <mutex>
-
+#include "geometry/GeometryComputer.hpp"
+#include "shape/SizeComputer.hpp"
+#include "Macro.h"
 namespace MNN {
-extern void registerCPUBackendCreator();
-#ifdef MNN_CODEGEN_REGISTER
-extern void registerMetalBackendCreator();
+extern void registerCPURuntimeCreator();
+
+#if MNN_METAL_ENABLED
+extern void registerMetalRuntimeCreator();
 #endif
+#if MNN_COREML_ENABLED
+extern void registerCoreMLRuntimeCreator();
+#endif
+
+static std::once_flag s_flag;
 void registerBackend() {
-    static std::once_flag s_flag;
     std::call_once(s_flag, [&]() {
-        registerCPUBackendCreator();
-#ifdef MNN_CODEGEN_REGISTER
-        registerMetalBackendCreator();
+        registerCPURuntimeCreator();
+#ifndef MNN_BUILD_MINI
+        SizeComputerSuite::init();
+        GeometryComputer::init();
+#endif
+#if MNN_COREML_ENABLED
+        registerCoreMLRuntimeCreator();
+#endif
+#if MNN_METAL_ENABLED
+        registerMetalRuntimeCreator();
 #endif
     });
 }

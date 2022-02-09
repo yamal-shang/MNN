@@ -1,4 +1,6 @@
+#ifdef MNN_SUPPORT_FP16
 #pragma OPENCL EXTENSION cl_khr_fp16 : enable
+#endif
 #define READ_INPUT_IMAGE(i, base)                                                                         \
     int inOffset##i = inWidthOffset##i + base;                                                           \
     inOffset##i =                                                                                   \
@@ -20,8 +22,14 @@ __constant sampler_t SAMPLER = CLK_NORMALIZED_COORDS_FALSE | CLK_ADDRESS_CLAMP |
         return;                                                     \
     }
 
-__kernel void depthwise_conv2d_s1(GLOBAL_SIZE_2_DIMS __read_only image2d_t input, __read_only image2d_t filter,
+__kernel
+#if SET_ATTRIBUTE
+__attribute__((work_group_size_hint(16, 16, 1)))
+#endif
+void depthwise_conv2d_s1(GLOBAL_SIZE_2_DIMS __read_only image2d_t input, __read_only image2d_t filter,
+                                  #ifndef NO_BIAS
                                   __read_only image2d_t bias,
+                                  #endif
                                   __write_only image2d_t output,
                                   __private const int2 inputShape,
                                   __private const int inChannelBlocks, 
@@ -38,7 +46,11 @@ __kernel void depthwise_conv2d_s1(GLOBAL_SIZE_2_DIMS __read_only image2d_t input
 
     const int inChannelBlockIdx = outChannelBlockIdx;
 
+    #ifndef NO_BIAS
     FLOAT4 outValue0 = RI_F(bias, SAMPLER, (int2)(outChannelBlockIdx, 0));
+    #else
+    FLOAT4 outValue0 = (FLOAT4)(0.0f);
+    #endif
     FLOAT4 outValue1 = outValue0;
     FLOAT4 outValue2 = outValue0;
     FLOAT4 outValue3 = outValue0;
@@ -117,8 +129,14 @@ __kernel void depthwise_conv2d_s1(GLOBAL_SIZE_2_DIMS __read_only image2d_t input
     }
 }
 
-__kernel void depthwise_conv2d(GLOBAL_SIZE_2_DIMS __read_only image2d_t input, __read_only image2d_t filter,
+__kernel
+#if SET_ATTRIBUTE
+__attribute__((work_group_size_hint(16, 16, 1)))
+#endif
+void depthwise_conv2d(GLOBAL_SIZE_2_DIMS __read_only image2d_t input, __read_only image2d_t filter,
+                               #ifndef NO_BIAS
                                __read_only image2d_t bias,
+                               #endif
                                __write_only image2d_t output,
                                __private const int2 inputShape,
                                __private const int inChannelBlocks, __private const int2 outputShape,
@@ -137,7 +155,11 @@ __kernel void depthwise_conv2d(GLOBAL_SIZE_2_DIMS __read_only image2d_t input, _
 
     const int inChannelBlockIdx = outChannelBlockIdx;
 
+    #ifndef NO_BIAS
     FLOAT4 outValue0 = RI_F(bias, SAMPLER, (int2)(outChannelBlockIdx, 0));
+    #else
+    FLOAT4 outValue0 = (FLOAT4)(0.0f);
+    #endif
     FLOAT4 outValue1 = outValue0;
     FLOAT4 outValue2 = outValue0;
     FLOAT4 outValue3 = outValue0;

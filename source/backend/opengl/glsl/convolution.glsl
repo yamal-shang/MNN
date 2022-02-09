@@ -18,16 +18,15 @@ layout(location=11) uniform ivec3 uInputSize;
 
 #define UP_DIV(x, y) (((x)+(y)-1)/(y))
 
+//weight : oc ic h w -> oc/4, ic/4, ky kx ic4 oc4
 layout (local_size_x = XLOCAL, local_size_y = YLOCAL, local_size_z = ZLOCAL) in;
 
 void main()
 {
-    ivec3 pos = ivec3(gl_GlobalInvocationID)*ivec3(uUnroll, 1, 1);
-    ivec3 outputSize = uOutputSize;
-    if (all(lessThan(pos, outputSize)))
+    if (all(lessThan(ivec3(gl_GlobalInvocationID), uOutputSize)))
     {
-        int KSIZE_Y = uKernelSize.y;
-        int KSIZE_X = uKernelSize.x;
+        ivec3 pos = ivec3(gl_GlobalInvocationID)*ivec3(uUnroll, 1, 1);
+        int kernelX = uKernelSize.x;
         ivec3 inputSize = uInputSize;
         ivec2 s0 = pos.xy*uStride-uPad;
         int fx, fy, fz;
@@ -41,9 +40,9 @@ void main()
         for (fy=sfxy.y; fy<efxy.y; ++fy)
         {
             int sy = fy*uDilate.y + s0.y;
-            for (fx=0; fx<KSIZE_X; ++fx)
+            for (fx=0; fx<kernelX; ++fx)
             {
-                int kernelZ = fx + fy*KSIZE_X;
+                int kernelZ = fx + fy*kernelX;
                 int sx1 = fx*uDilate.x + s0.x;
                 int sx2 = sx1 + uStride.x;
                 int sx3 = sx1 + uStride.x * 2;
@@ -60,9 +59,9 @@ void main()
                     vec4 k1 = texelFetch(uKernel, ivec3(kernelX+1, kernelY, kernelZ), 0);
                     vec4 k2 = texelFetch(uKernel, ivec3(kernelX+2, kernelY, kernelZ), 0);
                     vec4 k3 = texelFetch(uKernel, ivec3(kernelX+3, kernelY, kernelZ), 0);
-
+                    
                     mat4 k = mat4(k0, k1, k2, k3);
-
+                    
                     color  += k*texelFetch(uInput, ivec3(sx1, sy, fz), 0) * m1;
                     color2 += k*texelFetch(uInput, ivec3(sx2, sy, fz), 0) * m2;
                     color3 += k*texelFetch(uInput, ivec3(sx3, sy, fz), 0) * m3;
@@ -70,22 +69,22 @@ void main()
                 }
             }
         }
-#ifdef RELU
+        #ifdef RELU
         color = max(color, vec4(0));
         color2 = max(color2, vec4(0));
         color3 = max(color3, vec4(0));
         color4 = max(color4, vec4(0));
-#endif
-#ifdef RELU6
+        #endif
+        #ifdef RELU6
         color = clamp(color, vec4(0), vec4(6));
         color2 = clamp(color2, vec4(0), vec4(6));
         color3 = clamp(color3, vec4(0), vec4(6));
         color4 = clamp(color4, vec4(0), vec4(6));
-#endif
+        #endif
         imageStore(uOutput, ivec3(pos.x+0, pos.y, pos.z), color);
         imageStore(uOutput, ivec3(pos.x+1, pos.y, pos.z), color2);
         imageStore(uOutput, ivec3(pos.x+2, pos.y, pos.z), color3);
         imageStore(uOutput, ivec3(pos.x+3, pos.y, pos.z), color4);
     }
-
+    
 }

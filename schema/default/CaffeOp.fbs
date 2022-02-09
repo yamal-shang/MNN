@@ -7,26 +7,53 @@ enum PadMode : byte{
 }
 
 table Convolution2DCommon {
-    padX:int;
-    padY:int;
-    kernelX:int;
-    kernelY:int;
-    strideX:int;
-    strideY:int;
-    dilateX:int;
-    dilateY:int;
-    padMode:PadMode;
-    group:int;
-    outputCount:int;
-    inputCount:int;
+    padX:int = 0;
+    padY:int = 0;
+    kernelX:int = 1;
+    kernelY:int = 1;
+    strideX:int = 1;
+    strideY:int = 1;
+    dilateX:int = 1;
+    dilateY:int = 1;
+    padMode:PadMode = CAFFE;
+    group:int = 1;
+    outputCount:int = 0;
+    inputCount:int = 0;
     relu:bool=false;
     relu6:bool=false;
+    pads:[int];
+    outPads:[int];
+    hasOutputShape:bool = false;
+}
+
+table Convolution3DCommon {
+    dilates:[int];
+    strides:[int];
+    kernels:[int];
+    pads:[int];
+    padMode:PadMode = CAFFE;
+    inputCount:int = 0;
+    outputCount:int = 0;
+    relu:bool = false;
+    relu6:bool = false;
+    group:int = 1;
+}
+
+enum SparseAlgo : byte {
+    RANDOM = 0,
+    SIMD_OC = 1,
+}
+
+table SparseCommon {
+    method:SparseAlgo = RANDOM;
+    args:[Attribute];
 }
 
 // idst param
 table IDSTQuan {
     buffer:[byte];
     alpha:[float];
+    // 1->idstQuanInt8, 2->idstSparseQuan, 3->fp16, 4->weightInt8
     type:int;
     useInt32:bool;
     quantScale:float;
@@ -38,12 +65,45 @@ table IDSTQuan {
     has_scaleInt:bool;
 }
 
+enum QuantizeAlgo : byte {
+    DEFAULT = 0,
+    OVERFLOW_AWARE = 1,
+    WINOGRAD_AWARE = 2,
+}
+
+table QuantizedFloatParam{
+    weight:[byte];
+    bias:[int];
+    // scale channel-wise(depthwise conv/batchnorm...)
+    // which is used to int32*scale->int8
+    scale:[float];
+    // tensor scale, which is used to dequantize the int8 value to float value
+    // only used for debug or output op
+    tensorScale:[float];
+    // quantize algorithm
+    method:QuantizeAlgo = DEFAULT;
+    nbits: int = 8;
+    zeroPoint: byte = 0;
+    outputZeroPoint: byte = 0;
+    clampMin: byte = -128;
+    clampMax: byte = 127;
+    // binary proto: [originKySize, originKxSize, transKySize, transKxSize, {kyStart, kxStart, unitY, unitX}, {...} ...]
+    winogradAttr:[int];
+}
+
 table Convolution2D {
     common:Convolution2DCommon;
     weight:[float];
     bias:[float];
-
     quanParameter:IDSTQuan;
+    symmetricQuan:QuantizedFloatParam;
+    sparseParameter:SparseCommon;
+}
+
+table Convolution3D {
+    common:Convolution3DCommon;
+    weight:[float];
+    bias:[float];
 }
 
 table InnerProduct {
@@ -67,6 +127,11 @@ enum PoolPadType : byte {
     VALID,
     SAME
 }
+enum AvgPoolCountType : byte {
+    DEFAULT=0,
+    INCLUDE_PADDING,
+    EXCLUDE_PADDING
+}
 table Pool {
     padX:int;
     padY:int;
@@ -78,6 +143,19 @@ table Pool {
     type:PoolType;
     padType:PoolPadType;
     dataType:DataType=DT_FLOAT;
+    ceilModel:bool=true;
+    pads:[int];
+    countType:AvgPoolCountType;
+}
+
+table Pool3D {
+    strides:[int];
+    kernels:[int];
+    pads:[int];
+
+    type:PoolType;
+    padType:PoolPadType;
+    isGlobal:bool=false;
 }
 
 table Relu {
@@ -85,7 +163,8 @@ table Relu {
 }
 
 table Relu6 {
-    slope:float;
+    minValue:float = 0.0;
+    maxValue:float = 6.0;
 }
 
 table PRelu {
@@ -93,11 +172,16 @@ table PRelu {
     slope:[float];
 }
 
+table ELU {
+    alpha:float;
+}
+
 table LRN {
     regionType:int;
     localSize:int;
     alpha:float;
     beta:float;
+    bias:float=1.0;
 }
 
 table ArgMax {
@@ -157,7 +241,8 @@ table Scale {
 enum EltwiseType : byte {
     PROD = 0,
     SUM = 1,
-    MAXIMUM = 2
+    MAXIMUM = 2,
+    SUB = 3
 }
 
 table Eltwise {
@@ -176,7 +261,7 @@ table Permute {
 
 table Reshape {
     dims:[int];
-    dimType: MNN_DATA_FORMAT;    
+    dimType: MNN_DATA_FORMAT;
 }
 
 table DetectionOutput {
@@ -192,10 +277,13 @@ table DetectionOutput {
     objectnessScore:float=0.01;
 }
 
-table RoiPooling {
+table RoiParameters {
     pooledWidth:int;
     pooledHeight:int;
     spatialScale:float;
+    samplingRatio:int = -1;
+    aligned:bool = false;
+    poolType:PoolType = AVEPOOL;
 }
 
 table Proposal {
@@ -210,6 +298,16 @@ table Proposal {
     anchors:Blob;
 }
 
+enum CoordinateTransformationMode : byte{
+    NotSet = 0,
+    AlignCorners = 1,
+    HalfPixels = 2,
+    PytorchHalfPixels = 3,
+    Asymmetric = 4,
+    TensorflowHalfPixels = 5,
+    TensorflowCropAndResize = 6,
+}
+
 table Interp {
     widthScale:float;
     heightScale:float;
@@ -217,6 +315,11 @@ table Interp {
     outputHeight:int;
     resizeType:int;
     alignCorners:bool;
+    halfPixelCenters:bool = false;
+    widthOffset:float;
+    heightOffset:float;
+    cubicCoeffA:float = -0.75;
+    ctm:CoordinateTransformationMode = NotSet;
 }
 
 table Resize {
@@ -245,3 +348,14 @@ table Normalize {
   scale:[float];
 }
 
+table EltwiseInt8 {
+    type:EltwiseType;
+    inputQuan0:QuantizedFloatParam;
+    inputQuan1:QuantizedFloatParam;
+    outputQuan:QuantizedFloatParam;
+}
+
+table CumSum {
+    exclusive:bool;
+    reverse:bool;
+}

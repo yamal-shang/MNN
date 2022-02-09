@@ -8,6 +8,30 @@
 
 #include "OpConverter.hpp"
 
+class Upsample : public OpConverter {
+public:
+    virtual void run(MNN::OpT* dstOp, const caffe::LayerParameter& parameters, const caffe::LayerParameter& weight);
+    Upsample() {
+    }
+    virtual ~Upsample() {
+    }
+    virtual MNN::OpType opType() {
+        return MNN::OpType_Resize;
+    }
+    virtual MNN::OpParameter type() {
+        return MNN::OpParameter_Resize;
+    }
+};
+
+void Upsample::run(MNN::OpT* dstOp, const caffe::LayerParameter& parameters, const caffe::LayerParameter& weight) {
+    auto resize       = new MNN::ResizeT;
+    dstOp->main.value = resize;
+    auto& r           = parameters.upsample_param();
+    resize->xScale    = r.scale();
+    resize->yScale    = r.scale();
+}
+static OpConverterRegister<Upsample> ___a("Upsample");
+
 class Resize : public OpConverter {
 public:
     virtual void run(MNN::OpT* dstOp, const caffe::LayerParameter& parameters, const caffe::LayerParameter& weight);
@@ -65,8 +89,8 @@ void Interp::run(MNN::OpT* dstOp, const caffe::LayerParameter& parameters, const
         resize->outputHeight = Par.height();
     if (Par.has_width())
         resize->outputWidth = Par.width();
-    resize->resizeType      = 2;
-    resize->alignCorners    = true;
+    resize->resizeType   = 2;
+    resize->alignCorners = true;
 }
 
 static OpConverterRegister<Interp> b("Interp");

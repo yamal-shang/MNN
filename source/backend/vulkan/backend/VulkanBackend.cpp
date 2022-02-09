@@ -8,25 +8,28 @@
 
 #include "VulkanBackend.hpp"
 #include <mutex>
-#include "Execution.hpp"
-#include "Macro.h"
-#include "Tensor.hpp"
-#include "TensorUtils.hpp"
-#include "VulkanDevice.hpp"
-#include "VulkanImageConverter.hpp"
-#include "VulkanInstance.hpp"
+#include "core/Execution.hpp"
+#include "core/Macro.h"
+#include <MNN/Tensor.hpp>
+#include "core/TensorUtils.hpp"
+#include "core/OpCommonUtils.hpp"
+#include "component/VulkanDevice.hpp"
+#include "execution/VulkanImageConverter.hpp"
+#include "component/VulkanInstance.hpp"
+#include "execution/VulkanBasicExecution.hpp"
 //#define MNN_OPEN_TIME_TRACE
-#include "AutoTime.hpp"
+#include <MNN/AutoTime.hpp>
 #ifdef MNN_USE_NEON
 #include <arm_neon.h>
 #endif
-
+//#define MNN_OP_SUPPORT_LOG
+//#define MNN_VULKAN_DUMP_MEMORY_USAGE
+#define MNN_VULKAN_MAX_CACHE_CONVSIZE 50
 namespace MNN {
+
 static std::map<OpType, VulkanBackend::Creator*>* gCreator = nullptr;
 
-// –––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––
 // Creator
-// –––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––
 static inline std::map<OpType, VulkanBackend::Creator*>* getCreatorMap() {
     if (nullptr == gCreator) {
         gCreator = new std::map<OpType, VulkanBackend::Creator*>();
@@ -43,22 +46,6 @@ static void _copyBufferToTensor(const Tensor* dest, const VulkanBuffer* source) 
     source->unmap();
 }
 
-static int _getAlignSize(const Tensor* tensor) {
-    auto format      = TensorUtils::getDescribe(tensor)->dimensionFormat;
-    auto elementSize = tensor->elementSize();
-    // [TODO] Find a better way
-    if (format == MNN_DATA_FORMAT_NCHW) {
-        if (tensor->dimensions() >= 2) {
-            elementSize = elementSize / tensor->channel() * ALIGN_UP4(tensor->channel());
-        }
-    } else if (format == MNN_DATA_FORMAT_NHWC) {
-        if (tensor->dimensions() >= 3) {
-            elementSize = elementSize / tensor->channel() * ALIGN_UP4(tensor->channel());
-        }
-    }
-    return elementSize;
-}
-
 static void _copyTensorToBuffer(const Tensor* source, const VulkanBuffer* dest) {
     auto destPtr     = dest->map();
     auto dataType    = source->getType();
@@ -68,177 +55,175 @@ static void _copyTensorToBuffer(const Tensor* source, const VulkanBuffer* dest) 
     dest->unmap();
 }
 
-VulkanTensor::VulkanTensor(const Tensor* shape, const VulkanMemoryPool& pool, bool forceBuffer, bool seperate) {
-    auto format = TensorUtils::getDescribe(shape)->dimensionFormat;
-    if (MNN_DATA_FORMAT_NC4HW4 == format && !forceBuffer) {
-        mImage = std::make_shared<VulkanImage>(pool, seperate,
-                                               std::vector<int>{
-                                                   std::max(shape->width(), 1),
-                                                   std::max(shape->height(), 1),
-                                                   UP_DIV(shape->channel(), 4) * shape->batch(),
-                                               },
-                                               shape->getType());
-    } else {
-        // Compute Shader don't support uint8 / int8 / float16 / uint64, all use int32/float32
-        mBuffer = std::make_shared<VulkanBuffer>(pool, seperate, _getAlignSize(shape) * sizeof(float));
-    }
-}
-void VulkanTensor::release() {
-    if (nullptr != mBuffer.get()) {
-        mBuffer->release();
-    }
-    if (nullptr != mImage.get()) {
-        mImage->release();
-    }
-}
+VulkanBackend::VulkanBackend(const VulkanRuntime* runtime, const Backend::Info& info) : Backend(MNN_FORWARD_VULKAN) {
+    mRuntime = runtime;
+    mDirect = Backend::Info::INDIRECT != info.mode;
+    mDynamicMemoryPool.reset(new VulkanMemoryPool(runtime->mMemoryPool.get()));
 
-uint64_t VulkanTensor::deviceId() {
-    if (mImage.get()) {
-        return reinterpret_cast<uint64_t>(mImage->view());
-    } else {
-        return reinterpret_cast<uint64_t>(mBuffer->buffer());
-    }
-}
-
-VulkanBackend::VulkanBackend(const MNNVulkanContext* context) : Backend(MNN_FORWARD_VULKAN) {
-    if (NULL != context) {
-        mInstance = std::make_shared<VulkanInstance>(context->pInstance);
-        mDevice   = std::make_shared<VulkanDevice>(mInstance, context->pPhysicalDevice, context->pDevice,
-                                                 context->iQueueFamilyIndex, context->pQueue);
-    } else {
-        mInstance = std::make_shared<VulkanInstance>();
-        mDevice   = std::make_shared<VulkanDevice>(mInstance);
-    }
     auto& dev              = device();
-    mCmdPool               = std::make_shared<VulkanCommandPool>(dev);
     mFence                 = std::make_shared<VulkanFence>(dev);
-    std::string deviceName = dev.proty().deviceName;
-    if (deviceName.find("Mali") != std::string::npos) {
-        mGpuType = MALI;
-    } else if (deviceName.find("Adreno") != std::string::npos) {
-        mGpuType = ADRENO;
+    if (!mDirect) {
+        mCmdBuffer.reset(runtime->mCmdPool->allocBuffer());
     }
-
-    mMemoryPool        = std::make_shared<VulkanMemoryPool>(dev);
-    mDynamicMemoryPool = std::make_shared<VulkanMemoryPool>(dev);
-    mSampler         = std::make_shared<VulkanSampler>(dev, VK_FILTER_NEAREST, VK_SAMPLER_ADDRESS_MODE_CLAMP_TO_BORDER);
-    mPipelineFactory = std::make_shared<VulkanPipelineFactory>(dev);
+    mInitBuffer.reset(runtime->mCmdPool->allocBuffer());
 }
 
 VulkanBackend::~VulkanBackend() {
     /*keep release order*/
-    mPipelineFactory = nullptr;
-    mSampler         = nullptr;
+    mCmdBuffer = nullptr;
 
-    mStaticeBuffers.clear();
     mAllBuffers.clear();
-
     mHostBuffer = nullptr;
     mCmdBuffers.clear();
     mFence = nullptr;
     mConverters.clear();
-
-    mDynamicMemoryPool = nullptr;
-    mMemoryPool        = nullptr;
-
-    mCmdPool  = nullptr;
-    mDevice   = nullptr;
-    mInstance = nullptr;
 }
-
-bool VulkanBackend::onLoadLibrary(const GpuLibrary* library) {
-    // [TODO]: Support Plugin
-    return true;
-}
-
 void VulkanBackend::pushCommand(VkCommandBuffer buffer) const {
     mCmdBuffers.emplace_back(buffer);
+//    _finish();
 }
 
 const VulkanPipeline* VulkanBackend::getPipeline(const std::string& key, const std::vector<VkDescriptorType>& types,
                                                  const std::vector<uint32_t>& localSize) const {
-    return mPipelineFactory->getPipeline(key, types, localSize);
+    return mRuntime->mPipelineFactory->getPipeline(key, types, localSize);
 }
 
 bool VulkanBackend::_supportImageSize(const Tensor* MTensor) {
-    if (UP_DIV(MTensor->channel(), 4) * MTensor->batch() > device().proty().limits.maxImageDimension3D) {
+    if (MTensor->getType().code != halide_type_float) {
+        return false;
+    }
+    auto format = TensorUtils::getDescribe(MTensor)->dimensionFormat;
+    if (format != MNN_DATA_FORMAT_NC4HW4) {
+        return true;
+    }
+    auto nhwc = VulkanTensor::tensorShapeFormat(MTensor);
+    auto width = UP_DIV(nhwc[3], 4) * nhwc[2];
+    auto height = nhwc[0] * nhwc[1];
+    int unit = device().proty().limits.maxImageDimension2D;
+    if (width > unit || height > unit) {
+#ifdef MNN_OP_SUPPORT_LOG
+        MNN_PRINT("Not support size: %d - %d\n", width, height);
+#endif
         return false;
     }
     return true;
 }
+void VulkanBackend::onResizeBegin() {
+    mInitBuffer->begin(0);
+    if (!mDirect) {
+        mCmdBuffer->begin(0);
+    }
+}
+void VulkanBackend::onResizeEnd() {
+    if (!mDirect) {
+        mCmdBuffer->end();
+    }
+    mInitBuffer->end();
+    mCmdBuffers.emplace_back(mInitBuffer->get());
+    _finish();
+}
+class VulkanMemRelease : public Backend::MemObj {
+public:
+    VulkanMemRelease(std::shared_ptr<VulkanTensor> t) {
+        mTensor = t;
+    }
+    virtual ~ VulkanMemRelease() {
+        mTensor->release();
+    }
+private:
+    std::shared_ptr<VulkanTensor> mTensor;
+};
 
-bool VulkanBackend::onAcquireBuffer(const Tensor* tensor, StorageType storageType) {
+Backend::MemObj* VulkanBackend::onAcquire(const Tensor* tensor, StorageType storageType) {
+    //FUNC_PRINT_ALL(tensor, p);
+
     auto MTensor     = const_cast<Tensor*>(tensor);
-    auto format      = TensorUtils::getDescribe(MTensor)->dimensionFormat;
-    bool forceBuffer = false;
-    if (MNN_DATA_FORMAT_NC4HW4 == format) {
-        if (!_supportImageSize(MTensor)) {
-            // forceBuffer = true;
-            MNN_PRINT("Force Use Buffer because then Tensor is too Large: %d, %d, %d, %d\n", MTensor->width(),
-                      MTensor->height(), MTensor->channel(), MTensor->batch());
-            forceBuffer = true;
-        }
-    }
     if (Backend::STATIC == storageType) {
-        auto newBuffer           = std::make_shared<VulkanTensor>(MTensor, getMemoryPool(), forceBuffer);
-        MTensor->buffer().device = newBuffer->deviceId();
-        mStaticeBuffers.insert(std::make_pair(MTensor->buffer().device, newBuffer));
-    } else {
-        bool seperate  = storageType == Backend::DYNAMIC_SEPERATE;
-        auto newBuffer = std::make_shared<VulkanTensor>(MTensor, getDynamicMemoryPool(), forceBuffer, seperate);
-        MTensor->buffer().device = newBuffer->deviceId();
-        mAllBuffers.insert(std::make_pair(MTensor->buffer().device, newBuffer));
+        auto newBuffer           = std::make_shared<VulkanTensor>(MTensor, getMemoryPool(), device().proty().limits);
+        MTensor->buffer().device = (uint64_t)(newBuffer.get());
+        return new VulkanMemRelease(newBuffer);
     }
-    return true;
+    bool seperate  = storageType == Backend::DYNAMIC_SEPERATE;
+    auto newBuffer = std::make_shared<VulkanTensor>(MTensor, getDynamicMemoryPool(), device().proty().limits, seperate);
+    MTensor->buffer().device = (uint64_t)(newBuffer.get());
+    mAllBuffers.insert(std::make_pair(MTensor->buffer().device, newBuffer));
+    return new VulkanMemRelease(newBuffer);;
 }
-bool VulkanBackend::onReleaseBuffer(const Tensor* tensor, StorageType storageType) {
-    auto buffer = (tensor->deviceId());
-    if (Backend::DYNAMIC == storageType) {
-        auto iter = mAllBuffers.find(buffer);
-        MNN_ASSERT(iter != mAllBuffers.end());
-        iter->second->release();
-    }
-    if (Backend::STATIC == storageType) {
-        auto iter = mStaticeBuffers.find(buffer);
-        MNN_ASSERT(iter != mStaticeBuffers.end());
-        mStaticeBuffers.erase(iter);
-    }
-    return true;
-}
+
 bool VulkanBackend::onClearBuffer() {
-    mMemoryPool->clear();
-    mDynamicMemoryPool->clear();
     mAllBuffers.clear();
+    mConverters.clear();
+    mDynamicMemoryPool->clear();
     return true;
 }
 Execution* VulkanBackend::onCreate(const std::vector<Tensor*>& inputs, const std::vector<Tensor*>& outputs,
                                    const MNN::Op* op) {
     auto creator = getCreatorMap();
     auto iter    = creator->find(op->type());
+    std::string name = "";
+    if (nullptr != op->name()) {
+        name = op->name()->str();
+    }
     if (iter == creator->end()) {
-        // MNN_PRINT("Vulkan don't support %d, %s: %s\n", op->type(), EnumNameOpType(op->type()),
-        // op->name()->c_str());
+#ifdef MNN_OP_SUPPORT_LOG
+        MNN_PRINT("Vulkan don't support %d, %s: %s\n", op->type(), EnumNameOpType(op->type()),
+                name.c_str());
+#endif
         return nullptr;
     }
     bool valid = true;
-    for (auto t : inputs) {
-        if (TensorUtils::getDescribe(t)->dimensionFormat == MNN_DATA_FORMAT_NC4HW4 && !_supportImageSize(t)) {
-            valid = false;
-            break;
+    for (int i=0; i<inputs.size(); ++i) {
+        if (!OpCommonUtils::opNeedContent(op->type(), i)) {
+            continue;
+        }
+        auto t = inputs[i];
+        auto inputDes = TensorUtils::getDescribe(t);
+        if (inputDes->memoryType == Tensor::InsideDescribe::MEMORY_VIRTUAL) {
+            for (auto& r : inputDes->regions) {
+                if (!_supportImageSize(r.origin)) {
+                    valid = false;
+                    break;
+                }
+            }
+            if (!valid) {
+                break;
+            }
+        } else {
+            if (!_supportImageSize(t)) {
+                valid = false;
+                break;
+            }
         }
     }
     for (auto t : outputs) {
-        if (TensorUtils::getDescribe(t)->dimensionFormat == MNN_DATA_FORMAT_NC4HW4 && !_supportImageSize(t)) {
+        if (!_supportImageSize(t)) {
             valid = false;
             break;
         }
     }
     if (!valid) {
+#ifdef MNN_OP_SUPPORT_LOG
+        MNN_ERROR("Vulkan don't support for %s, type=%s, Tensor not support\n", name.c_str(), EnumNameOpType(op->type()));
+#endif
         return nullptr;
     }
-    return iter->second->onCreate(inputs, op, this);
+    auto originExecution = (VulkanBasicExecution*)iter->second->onCreate(inputs, outputs, op, this);
+    if (nullptr == originExecution) {
+#ifdef MNN_OP_SUPPORT_LOG
+        MNN_ERROR("Vulkan don't support for %s, type=%s, Special case\n", name.c_str(), EnumNameOpType(op->type()));
+#endif
+        return nullptr;
+    }
+    if (mDirect) {
+        return new VulkanBasicExecutionDirect(std::shared_ptr<VulkanBasicExecution>(originExecution));
+    }
+    return new VulkanBasicExecutionInDirect(std::shared_ptr<VulkanBasicExecution>(originExecution));
 }
+
 void VulkanBackend::onExecuteBegin() const {
+    if (!mDirect) {
+        mCmdBuffers.push_back(mCmdBuffer->get());
+    }
     // FUNC_PRINT_ALL(mDynamicMemoryPool->computeSize(), f);
 }
 void VulkanBackend::onExecuteEnd() const {
@@ -248,69 +233,101 @@ void VulkanBackend::_finish() const {
     if (mCmdBuffers.empty()) {
         return;
     }
-    AUTOTIME;
-    VkSubmitInfo submit_info = {.sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO,
-                                .pNext                = nullptr,
-                                .waitSemaphoreCount   = 0,
-                                .pWaitSemaphores      = nullptr,
-                                .pWaitDstStageMask    = nullptr,
-                                .commandBufferCount   = (uint32_t)mCmdBuffers.size(),
-                                .pCommandBuffers      = mCmdBuffers.data(),
-                                .signalSemaphoreCount = 0,
-                                .pSignalSemaphores    = nullptr};
+    VkSubmitInfo submit_info = {/* .sType                = */ VK_STRUCTURE_TYPE_SUBMIT_INFO,
+                                /* .pNext                = */ nullptr,
+                                /* .waitSemaphoreCount   = */ 0,
+                                /* .pWaitSemaphores      = */ nullptr,
+                                /* .pWaitDstStageMask    = */ nullptr,
+                                /* .commandBufferCount   = */ (uint32_t)mCmdBuffers.size(),
+                                /* .pCommandBuffers      = */ mCmdBuffers.data(),
+                                /* .signalSemaphoreCount = */ 0,
+                                /* .pSignalSemaphores    = */ nullptr};
     auto fenceReal           = mFence->get();
     mFence->reset();
     CALL_VK(vkQueueSubmit(device().acquireDefaultDevQueue(), 1, &submit_info, fenceReal));
 
-    mCmdBuffers.clear();
     auto res = mFence->wait();
     MNN_VK_CHECK(res);
+    mCmdBuffers.clear();
 }
 
 const VulkanDevice& VulkanBackend::device() const {
-    return (*mDevice);
+    return (* mRuntime->mDevice);
 }
 
 void VulkanBackend::onCopyBuffer(const Tensor* srcTensor, const Tensor* dstTensor) const {
+#ifdef MNN_VULKAN_DEBUG
+#ifdef MNN_VULKAN_DEBUG_COPY
     AUTOTIME;
+    MNN_PRINT("Src: ");
+    for (int i=0; i<srcTensor->dimensions(); ++i) {
+        MNN_PRINT("%d , ", srcTensor->length(i));
+    }
+    MNN_PRINT("\n");
+    MNN_PRINT("Dst: ");
+    for (int i=0; i<dstTensor->dimensions(); ++i) {
+        MNN_PRINT("%d , ", dstTensor->length(i));
+    }
+    MNN_PRINT("\n");
+#endif
+#endif
     if (srcTensor->host<float>() != nullptr) {
+        MNN_ASSERT(nullptr == dstTensor->host<float>());
         _finish();
-        auto size = _getAlignSize(srcTensor) * 4;
+        auto format = TensorUtils::getDescribe(dstTensor)->dimensionFormat;
+        std::shared_ptr<Tensor> tempTensor(new Tensor);
+        TensorUtils::copyShape(dstTensor, tempTensor.get(), true);
+        tempTensor->buffer().type = dstTensor->buffer().type;
+        auto size = VulkanTensor::getAlignSize(tempTensor.get()) * sizeof(float);
         // host->gpu
         _allocHostBuffer(size);
-        _copyTensorToBuffer(srcTensor, mHostBuffer.get());
-        auto format = TensorUtils::getDescribe(srcTensor)->dimensionFormat;
+        tempTensor->buffer().host = (uint8_t*)mHostBuffer->map();
+        MNNCPUCopyBuffer(srcTensor, tempTensor.get());
+        mHostBuffer->unmap();
         auto key    = std::make_tuple(dstTensor, true, format);
         auto iter   = mConverters.find(key);
         if (iter == mConverters.end()) {
+            if (mConverters.size() > MNN_VULKAN_MAX_CACHE_CONVSIZE) {
+                mConverters.clear();
+            }
             auto converter = std::make_shared<VulkanImageConverter>(this);
             std::shared_ptr<VulkanCommandPool::Buffer> convertorBuffer(
-                const_cast<VulkanCommandPool::Buffer*>(mCmdPool->allocBuffer()));
+                                                                       const_cast<VulkanCommandPool::Buffer*>(getPool().allocBuffer()));
             convertorBuffer->begin(0);
+            auto vkTensor = reinterpret_cast<VulkanTensor*>(dstTensor->deviceId());
+            for (int i=0; i<vkTensor->imageSize(); ++i) {
+                vkTensor->image(i)->barrierWrite(convertorBuffer->get());
+            }
             converter->encodeBufferToTensor(mHostBuffer->buffer(), dstTensor, mHostBuffer->size(), 0,
-                                            TensorUtils::getDescribe(srcTensor)->dimensionFormat,
+                                            format,
                                             convertorBuffer.get());
+            for (int i=0; i<vkTensor->imageSize(); ++i) {
+                vkTensor->image(i)->barrierRead(convertorBuffer->get());
+            }
             convertorBuffer->end();
             mConverters.insert(std::make_pair(key, std::make_pair(converter, convertorBuffer)));
             iter = mConverters.find(key);
         }
         mCmdBuffers.push_back(iter->second.second->get());
-    } else {
+    } else if (dstTensor->host<void>() != nullptr) {
         // gpu->host
-        auto size = _getAlignSize(dstTensor) * 4;
+        auto size = VulkanTensor::getAlignSize(srcTensor) * sizeof(float);
         _finish();
         _allocHostBuffer(size);
-        auto format = TensorUtils::getDescribe(dstTensor)->dimensionFormat;
+        auto format = TensorUtils::getDescribe(srcTensor)->dimensionFormat;
         auto key    = std::make_tuple(srcTensor, false, format);
 
         auto iter = mConverters.find(key);
         if (iter == mConverters.end()) {
+            if (mConverters.size() > MNN_VULKAN_MAX_CACHE_CONVSIZE) {
+                mConverters.clear();
+            }
             auto converter = std::make_shared<VulkanImageConverter>(this);
             std::shared_ptr<VulkanCommandPool::Buffer> convertorBuffer(
-                const_cast<VulkanCommandPool::Buffer*>(mCmdPool->allocBuffer()));
+                                                                       const_cast<VulkanCommandPool::Buffer*>(getPool().allocBuffer()));
             convertorBuffer->begin(0);
             converter->encodeTensorToBuffer(srcTensor, mHostBuffer->buffer(), mHostBuffer->size(), 0,
-                                            TensorUtils::getDescribe(dstTensor)->dimensionFormat,
+                                            format,
                                             convertorBuffer.get());
             convertorBuffer->end();
             mConverters.insert(std::make_pair(key, std::make_pair(converter, convertorBuffer)));
@@ -318,22 +335,86 @@ void VulkanBackend::onCopyBuffer(const Tensor* srcTensor, const Tensor* dstTenso
         }
         mCmdBuffers.push_back(iter->second.second->get());
         _finish();
-        _copyBufferToTensor(dstTensor, mHostBuffer.get());
+        std::shared_ptr<Tensor> tempTensor(new Tensor);
+        TensorUtils::copyShape(srcTensor, tempTensor.get(), true);
+        tempTensor->buffer().type = srcTensor->buffer().type;
+        tempTensor->buffer().host = (uint8_t*)mHostBuffer->map();
+        MNNCPUCopyBuffer(tempTensor.get(), dstTensor);
+        mHostBuffer->unmap();
+    } else {
+        // Device to device
+        _finish();
+        auto srcVkTensor = reinterpret_cast<VulkanTensor*>(srcTensor->deviceId());
+        auto dstVkTensor = reinterpret_cast<VulkanTensor*>(dstTensor->deviceId());
+        MNN_ASSERT(TensorUtils::getDescribe(srcTensor)->dimensionFormat == TensorUtils::getDescribe(dstTensor)->dimensionFormat);
+
+        MNN_ASSERT(srcVkTensor->imageSize() == dstVkTensor->imageSize());
+        int n = srcVkTensor->imageSize();
+        auto types = {
+            VK_DESCRIPTOR_TYPE_STORAGE_IMAGE,
+            VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER,
+            VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER,
+        };
+        // get pipeline
+        auto unaryPipeline = getPipeline("glsl_unaryImage_comp", types);
+        struct Param {
+            ivec4 size;
+            ivec4 srcOffset;
+            ivec4 srcStride;
+            ivec4 dstOffset;
+            ivec4 dstStride;
+        };
+        std::vector<std::shared_ptr<VulkanPipeline::DescriptorSet>> mDesSet(srcVkTensor->imageSize());
+        auto needSize = sizeof(Param);
+        if (needSize < proty().limits.nonCoherentAtomSize) {
+            needSize = proty().limits.nonCoherentAtomSize;
+        }
+        auto mParam = std::make_shared<VulkanBuffer>(getMemoryPool(), false, needSize * srcVkTensor->imageSize(), nullptr,
+                                                VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
+        std::shared_ptr<VulkanCommandPool::Buffer> cmdBuffer(mRuntime->mCmdPool->allocBuffer());
+        cmdBuffer->begin(0);
+        auto paramOrigin = (Param*)mParam->map();
+        for (int n=0; n<srcVkTensor->imageSize(); ++n) {
+            auto paramPtr = (Param*)((uint8_t*)paramOrigin + n * needSize);
+            mDesSet[n].reset(unaryPipeline->createSet());
+            auto inputT = srcVkTensor->image(n);
+            auto outputT = dstVkTensor->image(n);
+            auto totalSize = inputT->depth() * inputT->height() * inputT->width();
+            paramPtr->size[0] = inputT->depth() * inputT->height() * inputT->width();
+            paramPtr->size[1] = inputT->depth();
+            paramPtr->size[2] = inputT->height();
+            paramPtr->size[3] = inputT->width();
+            paramPtr->dstOffset[0] = 0;
+            paramPtr->dstOffset[1] = 0;
+            paramPtr->srcOffset[0] = 0;
+            paramPtr->srcOffset[1] = 0;
+            paramPtr->dstStride[0] = 1;
+            paramPtr->dstStride[1] = 1;
+            paramPtr->srcStride[0] = 1;
+            paramPtr->srcStride[1] = 1;
+            inputT->barrierRead(cmdBuffer->get());
+            outputT->barrierWrite(cmdBuffer->get());
+            mDesSet[n]->writeImage(outputT->view(), getCommonSampler()->get(), VK_IMAGE_LAYOUT_GENERAL, 0);
+            mDesSet[n]->writeImage(inputT->view(), getCommonSampler()->get(), VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, 1);
+            mDesSet[n]->writeBuffer(mParam->buffer(), 2, sizeof(Param), n * needSize);
+            unaryPipeline->bind(cmdBuffer->get(), mDesSet[n]->get());
+            vkCmdDispatch(cmdBuffer->get(), UP_DIV(totalSize, 256), 1, 1);
+            outputT->barrierRead(cmdBuffer->get());
+        }
+        mParam->unmap();
+        cmdBuffer->end();
+        mCmdBuffers.push_back(cmdBuffer->get());
+        _finish();
     }
-}
-const VulkanTensor* VulkanBackend::findTensor(uint64_t deviceId) const {
-    auto iter = mAllBuffers.find(deviceId);
-    if (iter != mAllBuffers.end()) {
-        return iter->second.get();
-    }
-    return nullptr;
 }
 
 void VulkanBackend::_allocHostBuffer(size_t size) const {
     if (mHostBuffer.get() == nullptr || mHostBuffer->size() < size) {
-        mHostBuffer =
-            std::make_shared<VulkanBuffer>(getMemoryPool(), false, size, nullptr, VK_BUFFER_USAGE_STORAGE_BUFFER_BIT,
-                                           VK_SHARING_MODE_EXCLUSIVE, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
+        mHostBuffer.reset(new VulkanBuffer(getMemoryPool(), false, size, nullptr,
+                                          VK_BUFFER_USAGE_STORAGE_BUFFER_BIT |
+                                          VK_BUFFER_USAGE_TRANSFER_SRC_BIT |
+                                          VK_BUFFER_USAGE_TRANSFER_DST_BIT,
+                                           VK_SHARING_MODE_EXCLUSIVE, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT));
         mConverters.clear();
     }
 }
@@ -343,31 +424,8 @@ bool VulkanBackend::addCreator(OpType t, Creator* c) {
     return true;
 }
 
-void VulkanBackend::copyBufferToImage(const VulkanBuffer* buffer, const VulkanImage* image) const {
+void VulkanBackend::copyBufferToImage(const VulkanBuffer* buffer, const VulkanImage* image, VkImageLayout finalLayout) const {
     std::vector<int> dimVector = image->dims();
-    if (image->format() != VK_FORMAT_R16G16B16A16_SFLOAT) {
-        VkBufferImageCopy copyRegions;
-        ::memset(&copyRegions, 0, sizeof(copyRegions));
-        copyRegions.imageOffset.x                   = 0;
-        copyRegions.imageOffset.y                   = 0;
-        copyRegions.imageOffset.z                   = 0;
-        copyRegions.imageExtent.depth               = image->depth();
-        copyRegions.imageExtent.height              = image->height();
-        copyRegions.imageExtent.width               = image->width();
-        copyRegions.imageSubresource.layerCount     = 1;
-        copyRegions.imageSubresource.mipLevel       = 0;
-        copyRegions.imageSubresource.aspectMask     = VK_IMAGE_ASPECT_COLOR_BIT;
-        copyRegions.imageSubresource.baseArrayLayer = 0;
-
-        std::unique_ptr<VulkanCommandPool::Buffer> cmdbuffer(
-            const_cast<VulkanCommandPool::Buffer*>(mCmdPool->allocBuffer()));
-        cmdbuffer->begin(0);
-        vkCmdCopyBufferToImage(cmdbuffer->get(), buffer->buffer(), image->get(), VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
-                               1, &copyRegions);
-        cmdbuffer->end();
-        mCmdPool->submitAndWait(cmdbuffer->get());
-    }
-
     const VulkanPipeline* transformPipeline = nullptr;
     std::vector<VkDescriptorType> types{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER,
                                         VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER};
@@ -396,66 +454,21 @@ void VulkanBackend::copyBufferToImage(const VulkanBuffer* buffer, const VulkanIm
     std::unique_ptr<VulkanPipeline::DescriptorSet> sets(transformPipeline->createSet());
     auto constBuffer = std::make_shared<VulkanBuffer>(getMemoryPool(), false, dimVector.size() * sizeof(int),
                                                       dimVector.data(), VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
-    sets->writeImage(image->view(), mSampler->get(), VK_IMAGE_LAYOUT_GENERAL, 0);
+    sets->writeImage(image->view(), mRuntime->mSampler->get(), VK_IMAGE_LAYOUT_GENERAL, 0);
     sets->writeBuffer(buffer->buffer(), 1, buffer->size());
     sets->writeBuffer(constBuffer->buffer(), 2, constBuffer->size());
 
     std::unique_ptr<VulkanCommandPool::Buffer> cmdbuffer(
-        const_cast<VulkanCommandPool::Buffer*>(mCmdPool->allocBuffer()));
+        const_cast<VulkanCommandPool::Buffer*>(mRuntime->mCmdPool->allocBuffer()));
     cmdbuffer->begin(0);
+    image->barrierWrite(cmdbuffer->get());
     transformPipeline->bind(cmdbuffer->get(), sets->get());
     vkCmdDispatch(cmdbuffer->get(), UP_DIV(image->width(), localX), UP_DIV(image->height(), localY),
                   UP_DIV(image->depth(), localZ));
+    image->barrierRead(cmdbuffer->get());
     cmdbuffer->end();
-    mCmdPool->submitAndWait(cmdbuffer->get());
+    mRuntime->mCmdPool->submitAndWait(cmdbuffer->get());
 }
 
-static bool _testVulkan() {
-    // std::make_unique need c++14
-    std::unique_ptr<VulkanInstance> instance(new VulkanInstance());
-    if (nullptr == instance) {
-        MNN_ERROR("Invalide device for support vulkan\n");
-        return false;
-    }
-    if (!instance->success()) {
-        MNN_ERROR("Invalide device for support vulkan\n");
-        return false;
-    }
-    if (!instance->supportVulkan()) {
-        MNN_ERROR("Invalide device for support vulkan\n");
-        return false;
-    }
-    return true;
-}
-
-// –––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––
-// Backend Register
-// –––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––––
-
-class VulkanBackendCreator : public BackendCreator {
-    virtual Backend* onCreate(const Backend::Info& info) const {
-        MNNVulkanContext* context = nullptr;
-        if (nullptr != info.user && nullptr != info.user->sharedContext) {
-            MNN_PRINT("Use user's vulkan context\n");
-            context = static_cast<MNNVulkanContext*>(info.user->sharedContext);
-        }
-        auto backend = new VulkanBackend(context);
-        if (!backend->success()) {
-            delete backend;
-            return nullptr;
-        }
-        return backend;
-    }
-};
-
-static bool gResistor = []() {
-    if (InitVulkan()) {
-        if (_testVulkan()) {
-            MNNInsertExtraBackendCreator(MNN_FORWARD_VULKAN, new VulkanBackendCreator);
-        }
-        return true;
-    }
-    return false;
-}();
 
 } // namespace MNN

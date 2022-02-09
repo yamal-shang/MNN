@@ -30,17 +30,22 @@ public:
         bn->slopeData = ones;
         bn->varData.resize(var_blob.data_size());
         bn->meanData.resize(mean_blob.data_size());
+        bn->epsilon = eps;
 
         int blob_cnt = w0->blobs_size();
         if (blob_cnt < 3) {
             memcpy(bn->meanData.data(), mean_blob.data().data(), sizeof(float) * mean_blob.data_size());
             float tmp;
             for (int j = 0; j < var_blob.data_size(); j++) {
-                tmp            = var_blob.data().data()[j] + eps;
+                tmp            = var_blob.data().data()[j];
                 bn->varData[j] = tmp;
             }
         } else {
-            float scale_factor = 1.0f / w0->blobs(2).data().data()[0];
+            auto scale_factor_div = w0->blobs(2).data().data()[0];
+            float scale_factor = 0.0f;
+            if (scale_factor_div != 0.0f) {
+                scale_factor = 1.0f / scale_factor_div;
+            }
             // pre-multiply scale_factor to mean and variance
             float tmp;
             for (int j = 0; j < mean_blob.data_size(); j++) {
@@ -48,7 +53,7 @@ public:
                 bn->meanData[j] = tmp;
             }
             for (int j = 0; j < var_blob.data_size(); j++) {
-                tmp            = var_blob.data().data()[j] * scale_factor + eps;
+                tmp            = var_blob.data().data()[j] * scale_factor;
                 bn->varData[j] = tmp;
             }
         }
@@ -71,10 +76,11 @@ static OpConverterRegister<BatchNormal> a("BatchNorm");
 class CuDNNBatchNorm : public OpConverter {
 public:
     virtual void run(MNN::OpT* dstOp, const caffe::LayerParameter& parameters, const caffe::LayerParameter& weight) {
-        auto bn                                           = new BatchNormT;
-        dstOp->main.value                                 = bn;
-        auto& l                                           = parameters;
-        auto w0                                           = &weight;
+        auto bn           = new BatchNormT;
+        dstOp->main.value = bn;
+        auto& l           = parameters;
+        auto w0           = &weight;
+        DCHECK(w0->blobs_size() >= 2) << "caffemodel error!";
         const caffe::BlobProto& mean_blob                 = w0->blobs(0);
         const caffe::BlobProto& var_blob                  = w0->blobs(1);
         const caffe::BatchNormParameter& batch_norm_param = l.batch_norm_param();
@@ -88,9 +94,7 @@ public:
         // var
         bn->varData.resize(var_blob.data_size());
         memcpy(bn->varData.data(), var_blob.data().data(), var_blob.data_size() * sizeof(float));
-        for (int i = 0; i < bn->varData.size(); i++) {
-            bn->varData[i] += eps;
-        }
+        bn->epsilon = eps;
         // slope
         if (blob_cnt < 3) {
             bn->slopeData.resize(bn->varData.size());
@@ -137,12 +141,13 @@ public:
         auto w                          = &weight;
         auto& l                         = parameters;
         const caffe::LayerParameter* w0 = (const caffe::LayerParameter*)w;
-
+        DCHECK(w0->blobs_size() >= 1) << "caffemodel error!";
         const caffe::BlobProto& weight_blob      = w0->blobs(0);
         const caffe::ScaleParameter& scale_param = l.scale_param();
         sc->scaleData.resize(weight_blob.data_size());
         auto bias_term = scale_param.bias_term();
         sc->biasData   = std::vector<float>(weight_blob.data_size(), 0.0f);
+        sc->channels   = weight_blob.data_size();
 
         const caffe::BlobProto& blob = w0->blobs(0);
         memcpy(sc->scaleData.data(), blob.data().data(), sizeof(float) * weight_blob.data_size());

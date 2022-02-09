@@ -9,18 +9,18 @@
 #ifndef CPUTOPKV2_HPP
 #define CPUTOPKV2_HPP
 
-#include "Execution.hpp"
+#include "core/Execution.hpp"
 #include "MNN_generated.h"
 
 namespace MNN {
 class CPUTopKV2 : public Execution {
 public:
-    CPUTopKV2(Backend *b, const TopKV2 *TopKV2Param);
+    CPUTopKV2(Backend *b, const Op* op);
     virtual ~CPUTopKV2() = default;
     virtual ErrorCode onExecute(const std::vector<Tensor *> &inputs, const std::vector<Tensor *> &outputs) override;
 
 private:
-    const TopKV2 *mTopKV2Param;
+    bool mLargest = true;
 };
 } // namespace MNN
 

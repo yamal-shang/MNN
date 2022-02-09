@@ -5,9 +5,17 @@
 //  Created by MNN on 2018/08/31.
 //  Copyright © 2018, Alibaba Group Holding Limited
 //
-
 #ifndef CPURuntime_hpp
 #define CPURuntime_hpp
+
+#include <stdint.h>
+#include "core/Macro.h"
+#ifdef MNN_USE_ARMV82
+struct cpuinfo_arm_isa {
+    bool fp16arith;
+    bool dot;
+};
+#endif
 
 /*
  CPU thread mode, only effective on HMP（Heterogeneous Multi-Processing）arch CPUs
@@ -24,5 +32,14 @@ typedef enum {
     MNN_CPU_MODE_BIG = 3
 } MNNCPUThreadsMode;
 int MNNSetCPUThreadsMode(MNNCPUThreadsMode mode);
+
+//
+float MNNGetCPUFlops(uint32_t number);
+
+#ifdef MNN_USE_ARMV82
+
+void cpuinfo_arm_init(struct cpuinfo_arm_isa* cpuinfo_isa);
+
+#endif // __aarch64__
 
 #endif /* CPUInfo_hpp */

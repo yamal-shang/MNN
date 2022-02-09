@@ -20,7 +20,8 @@ limitations under the License.
 #include <stdint.h>
 #include <limits>
 #include <stdexcept>
-#include "Macro.h"
+#include <algorithm>
+#include "core/Macro.h"
 #ifdef MNN_USE_NEON
 #include <arm_neon.h>
 #endif

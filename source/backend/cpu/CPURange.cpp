@@ -6,9 +6,9 @@
 //  Copyright © 2018, Alibaba Group Holding Limited
 //
 
-#include "CPURange.hpp"
-#include "CPUBackend.hpp"
-#include "Macro.h"
+#include "backend/cpu/CPURange.hpp"
+#include "backend/cpu/CPUBackend.hpp"
+#include "core/Macro.h"
 
 namespace MNN {
 
@@ -37,16 +37,12 @@ class CPURangeCreator : public CPUBackend::Creator {
 public:
     virtual Execution* onCreate(const std::vector<Tensor*>& inputs, const std::vector<Tensor*>& outputs,
                                 const MNN::Op* op, Backend* backend) const {
-        auto CPURange = op->main_as_Range();
-        switch (CPURange->Tidx()) {
-            case DataType_DT_INT32:
+        auto code = inputs[0]->getType().code;
+        switch (code) {
+            case halide_type_int:
                 return new MNN::CPURange<int32_t>(backend);
-            case DataType_DT_INT64:
-                return new MNN::CPURange<int64_t>(backend);
-            case DataType_DT_FLOAT:
+            case halide_type_float:
                 return new MNN::CPURange<float>(backend);
-            case DataType_DT_DOUBLE:
-                return new MNN::CPURange<double>(backend);
             default:
                 MNN_ASSERT(false); // unsupported type
                 return nullptr;

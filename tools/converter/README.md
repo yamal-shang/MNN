@@ -5,16 +5,17 @@
 ## Compile Model Convert Tools(gcc>=4.9)
 Firstly you need to install protobuf (version>3.0)
 ```bash
-# MacOS
+# macOS
 brew install protobuf
 ```
 Look up the [official document of installation](https://github.com/protocolbuffers/protobuf/tree/master/src) for other platforms.
 
 ```bash
-cd MNN/tools/converter
-./generate_schema.sh
+cd MNN
 mkdir build
-cd build && cmake .. && make -j4
+cd build
+cmake .. -DMNN_BUILD_CONVERTER=true
+make
 
 # or execute the shell script directly
 ./build_tool.sh
@@ -105,7 +106,7 @@ model = torchvision.models.alexnet(pretrained=True).cuda()
 input_names = [ "actual_input_1" ] + [ "learned_%d" % i for i in range(16) ]
 output_names = [ "output1" ]
 
-torch.onnx.export(model, dummy_input, "alexnet.onnx", verbose=True, input_names=input_names, output_names=output_names)
+torch.onnx.export(model, dummy_input, "alexnet.onnx", verbose=True, input_names=input_names, output_names=output_names, do_constant_folding=True)
 ```
 
 - Turn Onnx to MNN

@@ -52,6 +52,7 @@ function build_android_bench() {
           -DMNN_OPENMP:BOOL=$OPENMP \
           -DMNN_OPENGL:BOOL=$OPENGL \
           -DMNN_DEBUG:BOOL=OFF \
+          -DMNN_BUILD_BENCHMARK:BOOL=ON \
           -DMNN_BUILD_FOR_ANDROID_COMMAND=true \
           -DNATIVE_LIBRARY_OUTPUT=.
     make -j8 benchmark.out timeProfile.out
@@ -67,20 +68,20 @@ function bench_android() {
     adb shell chmod 0777 $ANDROID_DIR/benchmark.out
 
     if [ "" != "$PUSH_MODEL" ]; then
-        adb shell "rm -r $ANDROID_DIR/benchmark_models"
+        adb shell "rm -rf $ANDROID_DIR/benchmark_models"
         adb push $BENCHMARK_MODEL_DIR $ANDROID_DIR/benchmark_models
     fi
     adb shell "cat /proc/cpuinfo > $ANDROID_DIR/benchmark.txt"
     adb shell "echo >> $ANDROID_DIR/benchmark.txt"
     adb shell "echo Build Flags: ABI=$ABI  OpenMP=$OPENMP Vulkan=$VULKAN OpenCL=$OPENCL >> $ANDROID_DIR/benchmark.txt"
     #benchmark  CPU
-    adb shell "LD_LIBRARY_PATH=$ANDROID_DIR $ANDROID_DIR/benchmark.out $ANDROID_DIR/benchmark_models $RUN_LOOP $FORWARD_TYPE 2>$ANDROID_DIR/benchmark.err >> $ANDROID_DIR/benchmark.txt"
+    adb shell "LD_LIBRARY_PATH=$ANDROID_DIR $ANDROID_DIR/benchmark.out $ANDROID_DIR/benchmark_models $RUN_LOOP 5 $FORWARD_TYPE 2>$ANDROID_DIR/benchmark.err >> $ANDROID_DIR/benchmark.txt"
     #benchmark  Vulkan
-    adb shell "LD_LIBRARY_PATH=$ANDROID_DIR $ANDROID_DIR/benchmark.out $ANDROID_DIR/benchmark_models $RUN_LOOP 7 2>$ANDROID_DIR/benchmark.err >> $ANDROID_DIR/benchmark.txt"
+    adb shell "LD_LIBRARY_PATH=$ANDROID_DIR $ANDROID_DIR/benchmark.out $ANDROID_DIR/benchmark_models $RUN_LOOP 5 7 2>$ANDROID_DIR/benchmark.err >> $ANDROID_DIR/benchmark.txt"
     #benchmark OpenGL
-    #adb shell "LD_LIBRARY_PATH=$ANDROID_DIR $ANDROID_DIR/benchmark.out $ANDROID_DIR/benchmark_models 10 6 2>$ANDROID_DIR/benchmark.err >> $ANDROID_DIR/benchmark.txt"
+    #adb shell "LD_LIBRARY_PATH=$ANDROID_DIR $ANDROID_DIR/benchmark.out $ANDROID_DIR/benchmark_models $RUN_LOOP 5 6 2>$ANDROID_DIR/benchmark.err >> $ANDROID_DIR/benchmark.txt"
     #benchmark OpenCL
-    #adb shell "LD_LIBRARY_PATH=$ANDROID_DIR $ANDROID_DIR/benchmark.out $ANDROID_DIR/benchmark_models $RUN_LOOP 3 2>$ANDROID_DIR/benchmark.err >> $ANDROID_DIR/benchmark.txt"
+    #adb shell "LD_LIBRARY_PATH=$ANDROID_DIR $ANDROID_DIR/benchmark.out $ANDROID_DIR/benchmark_models 100 20 3 2>$ANDROID_DIR/benchmark.err >> $ANDROID_DIR/benchmark.txt"
     adb pull $ANDROID_DIR/benchmark.txt ../
 }
 

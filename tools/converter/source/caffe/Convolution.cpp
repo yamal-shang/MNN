@@ -6,6 +6,7 @@
 //  Copyright © 2018, Alibaba Group Holding Limited
 //
 
+#include "core/OpCommonUtils.hpp"
 #include "OpConverter.hpp"
 #include "logkit.h"
 using namespace std;
@@ -26,13 +27,14 @@ public:
         auto& p             = convProto;
         common->outputCount = p.num_output();
 
-        auto& weightBlob = weight.blobs(0);
-        DCHECK(weightBlob.shape().dim_size() == 4) << "Conv Weight Dimension ERROR!";
-        const auto& layerType = parameters.type();
-        if (layerType == "Deconvolution") {
-            common->inputCount = weightBlob.shape().dim(0);
+        auto& weightBlob      = weight.blobs(0);
+        if (weightBlob.has_shape()) {
+            // get weight information from weight Blob shape(caffe proto v2)
+            DCHECK(weightBlob.shape().dim_size() == 4) << "Conv Weight Dimension ERROR!";
+            common->inputCount = weightBlob.shape().dim(0) * weightBlob.shape().dim(1) / p.num_output() * common->group;
         } else {
-            common->inputCount = weightBlob.shape().dim(1);
+            // get shape information from Blob parameters(caffe proto v1)
+            common->inputCount = weightBlob.num() * weightBlob.channels() / p.num_output() * common->group;
         }
         // kernelsize
         int kernelSize[3];
@@ -143,10 +145,13 @@ public:
 
         auto convolution2D = dstOp->main.AsConvolution2D();
         int size           = 1;
-        for (int i = 0; i < weightBlob.shape().dim_size(); ++i) {
-            size *= weightBlob.shape().dim(i);
+        if (weightBlob.has_shape()) {
+            for (int i = 0; i < weightBlob.shape().dim_size(); ++i) {
+                size *= weightBlob.shape().dim(i);
+            }
+        } else {
+            size = weightBlob.num() * weightBlob.channels() * weightBlob.height() * weightBlob.width();
         }
-
         std::vector<float> weightData;
         weightData.resize(size);
         for (int i = 0; i < size; ++i) {
@@ -175,3 +180,43 @@ public:
     }
 };
 static OpConverterRegister<Deconvolution> _a("Deconvolution");
+
+
+class ConvolutionDepthwise : public ConvolutionCommon {
+public:
+    virtual void run(MNN::OpT* dstOp, const caffe::LayerParameter& parameters, const caffe::LayerParameter& weight) {
+        ConvolutionCommon::run(dstOp, parameters, weight);
+        auto weightBlob = weight.blobs(0);
+
+        auto convolution2D = dstOp->main.AsConvolution2D();
+        convolution2D->common->group = convolution2D->common->outputCount;
+        convolution2D->common->inputCount = convolution2D->common->outputCount;
+        int size           = 1;
+        if (weightBlob.has_shape()) {
+            for (int i = 0; i < weightBlob.shape().dim_size(); ++i) {
+                size *= weightBlob.shape().dim(i);
+            }
+        } else {
+            size = weightBlob.num() * weightBlob.channels() * weightBlob.height() * weightBlob.width();
+        }
+
+        std::vector<float> weightData;
+        weightData.resize(size);
+        for (int i = 0; i < size; ++i) {
+            weightData[i] = weightBlob.data(i);
+        }
+        convolution2D->weight = weightData;
+
+        auto& convProto = parameters.convolution_param();
+        std::vector<float> biasData(convProto.num_output(), 0.0f);
+        if (convProto.bias_term() && weight.blobs_size() >= 2) {
+            for (int i = 0; i < biasData.size(); ++i) {
+                biasData[i] = weight.blobs(1).data(i);
+            }
+        }
+        convolution2D->bias = biasData;
+    }
+};
+
+static OpConverterRegister<ConvolutionDepthwise> ab("ConvolutionDepthwise");
+static OpConverterRegister<ConvolutionDepthwise> ab2("DepthwiseConv");
